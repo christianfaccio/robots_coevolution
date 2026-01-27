@@ -25,8 +25,8 @@ class Game:
         self._spawn_obstacles()
 
         # Spawn robots ensuring they don't overlap with obstacles
-        self.robot1 = self._spawn_robot(color=(255, 50, 50), robot_id=1)
-        self.robot2 = self._spawn_robot(color=(50, 50, 255), robot_id=2)
+        self.robot1 = self._spawn_robot(color=(255, 50, 50))
+        self.robot2 = self._spawn_robot(color=(50, 50, 255))
 
         self.bullets = []
         self.game_over = False
@@ -36,7 +36,7 @@ class Game:
 
         return self.get_state()
 
-    def _spawn_robot(self, color, robot_id):
+    def _spawn_robot(self, color):
         """Spawn a robot ensuring it doesn't overlap with obstacles."""
         margin = 20
         for _ in range(100):  # Max attempts
@@ -51,12 +51,12 @@ class Game:
                     break
 
             if not overlaps:
-                return Robot(x=x, y=y, color=color, robot_id=robot_id)
+                return Robot(x=x, y=y, color=color)
 
         # Fallback: spawn anyway
         return Robot(x=random.randint(margin, self.width - margin),
                     y=random.randint(margin, self.height - margin),
-                    color=color, robot_id=robot_id)
+                    color=color)
 
     def _spawn_obstacles(self):
         """Generate random obstacles in the arena."""

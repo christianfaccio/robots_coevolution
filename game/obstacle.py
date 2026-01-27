@@ -9,6 +9,7 @@ class Obstacle:
         self.width = width
         self.height = height
         self.color = color
+        self.id = id(self)  # Unique identifier
 
     def get_rect(self):
         """Return pygame.Rect for convenience."""

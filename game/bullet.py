@@ -11,6 +11,7 @@ class Bullet(pygame.sprite.Sprite):
         self.owner_id = owner_id  # ID of the robot that shot this bullet
         self.alive = True
         self.radius = 1
+        self.id = id(self) # Unique identifier
 
         # Create a surface for the bullet
         self.image = pygame.Surface((self.radius * 2, self.radius * 2), pygame.SRCALPHA)
@@ -30,7 +31,7 @@ class Bullet(pygame.sprite.Sprite):
 
     def check_collision(self, robot):
         """Check if bullet hits a robot (not its owner)."""
-        if robot.robot_id == self.owner_id:
+        if robot.id == self.owner_id:
             return False
         dist = math.hypot(self.x - robot.x, self.y - robot.y)
         return dist < (self.radius + robot.radius)
