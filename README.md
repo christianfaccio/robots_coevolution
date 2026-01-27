@@ -8,3 +8,18 @@
 
 ---
 
+
+## How to run the game
+
+First of all, create a virtual environment and install all the requirements:
+```
+uv venv venv --python 3.11
+source venv/bin/activate
+uv pip install -r requirements.txt
+```
+
+Then, enter the `game` folder and run the `run.py` code:
+```
+cd game 
+uv run run.py
+```
