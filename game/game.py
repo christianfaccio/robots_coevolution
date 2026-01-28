@@ -1,7 +1,9 @@
 import pygame
 import random
-from robot import Robot
-from obstacle import Obstacle
+from .robot import Robot
+from .obstacle import Obstacle
+
+MAX_OBSTACLES = 8  # Max number of obstacles to consider
 
 class Game:
     def __init__(self, width=1000, height=1000, render=True):
@@ -60,7 +62,7 @@ class Game:
 
     def _spawn_obstacles(self):
         """Generate random obstacles in the arena."""
-        num_obstacles = random.randint(3, 8)
+        num_obstacles = random.randint(0, MAX_OBSTACLES)
         margin = 50  # Keep away from edges
 
         for _ in range(num_obstacles):

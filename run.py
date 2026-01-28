@@ -1,6 +1,6 @@
 import random
 import math
-from game import Game
+from game.game import Game
 
 def random_action():
     """Generate a random action for a robot."""

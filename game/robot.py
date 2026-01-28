@@ -1,7 +1,7 @@
 import pygame
 import math
 import random
-from bullet import Bullet
+from .bullet import Bullet
 
 
 class Robot(pygame.sprite.Sprite):
@@ -114,13 +114,13 @@ class Robot(pygame.sprite.Sprite):
         - Distance to obstacles
         """
         self.walls_distances = [
-            (arena_height - self.y) if (arena_height - self.y) < self.sensor_range else None, # South
-            (arena_width - self.x) if (arena_width - self.x) < self.sensor_range else None, # East
-            self.y if self.y < self.sensor_range else None, # North
-            self.x if self.x < self.sensor_range else None # West
+            (arena_height - self.y) / self.sensor_range if (arena_height - self.y) < self.sensor_range else 1.0, # South
+            (arena_width - self.x) / self.sensor_range if (arena_width - self.x) < self.sensor_range else 1.0, # East
+            self.y / self.sensor_range if self.y < self.sensor_range else 1.0, # North
+            self.x / self.sensor_range if self.x < self.sensor_range else 1.0 # West
         ] 
-        self.enemy_distance = math.hypot(other_robot.x - self.x, other_robot.y - self.y) if math.hypot(other_robot.x - self.x, other_robot.y - self.y) < self.sensor_range else None
-        self.obstacles_distances = [(obstacle.id, math.hypot(obstacle.x - self.x, obstacle.y - self.y)) for obstacle in obstacles if math.hypot(obstacle.x - self.x, obstacle.y - self.y) < self.sensor_range] if obstacles else []
+        self.enemy_distance = math.hypot(other_robot.x - self.x, other_robot.y - self.y) / self.sensor_range if math.hypot(other_robot.x - self.x, other_robot.y - self.y) < self.sensor_range else 1.0
+        self.obstacles_distances = [(obstacle.id, math.hypot(obstacle.x - self.x, obstacle.y - self.y) / self.sensor_range) for obstacle in obstacles if math.hypot(obstacle.x - self.x, obstacle.y - self.y) < self.sensor_range] if obstacles else []
 
         # Draw sensor circle range if screen provided
         if screen:
