@@ -2,7 +2,7 @@ import pygame
 import math
 
 class Bullet(pygame.sprite.Sprite):
-    def __init__(self, x, y, angle, owner_id, speed=10):
+    def __init__(self, x, y, angle, owner_id, speed=5):
         super().__init__()
         self.x = x
         self.y = y
@@ -34,12 +34,10 @@ class Bullet(pygame.sprite.Sprite):
         if robot.id == self.owner_id:
             return False
         dist = math.hypot(self.x - robot.x, self.y - robot.y)
-        return dist < (self.radius + robot.radius)
+        return dist < (self.radius + robot.length / 2)
 
-    def check_obstacle_collision(self, obstacle):
-        """Check if bullet collides with obstacle."""
-        return obstacle.collides_with_circle(self.x, self.y, self.radius)
-
-    def draw(self, screen):
+    def draw(self, screen, scale=1):
         """Draw the bullet."""
-        pygame.draw.circle(screen, (255, 255, 0), (int(self.x), int(self.y)), self.radius)
+        scaled_x = int(self.x * scale)
+        scaled_y = int(self.y * scale)
+        pygame.draw.circle(screen, (255, 255, 0), (scaled_x, scaled_y), int(self.radius))

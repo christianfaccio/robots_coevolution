@@ -1,13 +1,14 @@
 import random
-import math
-from game.game import Game
+from game.game import Game, ARENA_LENGTH
+
+N_DIRECTIONS = 16  # Must match robot.py
 
 def random_action():
     """Generate a random action for a robot."""
     return {
-        'movement': random.uniform(-1, 1) * math.pi,
-        'turret': random.uniform(-1, 1) * math.pi,
-        'shoot': random.random() < 0.1  
+        'robot_movement': random.randint(-1, 3),  # -1=none, 0=up, 1=down, 2=left, 3=right
+        'turret': random.randint(-1, N_DIRECTIONS - 1),  # -1=no change, 0 to 15 = direction
+        'shoot': True
     }
 
 
@@ -31,9 +32,9 @@ if __name__ == '__main__':
             game.step(action1, action2)
 
         # Draw
-        game.draw(show_sensors=True)
+        game.draw()
 
         # Cap framerate
-        game.clock.tick(60)
+        game.clock.tick(10)
 
     game.close()
