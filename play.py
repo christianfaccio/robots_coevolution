@@ -1,7 +1,14 @@
 import pickle
 import neat
 import pygame
+import sys
 from game.game import Game
+
+# Import classes from train module and make them available as if they were in __main__
+# This is needed because checkpoints were saved when train.py was __main__
+from train import HallOfFameReporter, HallOfFame
+sys.modules['__main__'].HallOfFameReporter = HallOfFameReporter
+sys.modules['__main__'].HallOfFame = HallOfFame
 
 def extract_best_genome(checkpoint_path):
       """Extract the best genome from a NEAT checkpoint file."""
@@ -63,14 +70,17 @@ def play(config_path, checkpoint_path, opponent_checkpoint_path):
             for ep in game.energy_points:
                 ep.draw(game.screen)
 
+            # Calculate remaining time as normalized value [0, 1]
+            remaining_time = 1.0 - (game.frame_count / game.max_frames)
+
             # Get action for trained robot
-            state1 = game.robot1.state(game.robot2)
+            state1 = game.robot1.state(game.robot2, remaining_time)
             output1 = net.activate(state1)
             action1 = output1.index(max(output1))
 
             # Get action for opponent
             if opponent_net:
-                state2 = game.robot2.state(game.robot1)
+                state2 = game.robot2.state(game.robot1, remaining_time)
                 output2 = opponent_net.activate(state2)
                 action2 = output2.index(max(output2))
             else:

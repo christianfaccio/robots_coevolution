@@ -62,7 +62,7 @@ class Robot:
         # Check collision with energy points
         for energy_point in self.energy_points:
             if self.rect.colliderect(energy_point.rect):
-                self.energy += 100
+                self.energy += 1
                 self.energy_points.remove(energy_point)
     
     def radar(self, other_robot, screen=None):
@@ -110,15 +110,16 @@ class Robot:
             pygame.draw.line(screen, (0, 0, 255), (x, y), (other_robot.rect.center[0], other_robot.rect.center[1]), 1)
             pygame.draw.circle(screen, (0, 0, 255), (other_robot.rect.center[0], other_robot.rect.center[1]), 4)
     
-    def state(self, other_robot):
+    def state(self, other_robot, remaining_time=1.0):
         self.radars.clear()
         self.radar(other_robot)
-        # walls (4), closest energy point (1), enemy robot (1), my energy (1), enemy energy (1)
+        # walls (4), closest energy point (1), enemy robot (1), my energy (1), enemy energy (1), remaining time (1)
         inputs = []
         for radar in self.radars:
             inputs.append(radar)
         inputs.append(self.energy)
         inputs.append(other_robot.energy)
+        inputs.append(remaining_time)  # Normalized [0, 1] where 1 = full time, 0 = time's up
         return inputs
     
     def draw(self, screen):

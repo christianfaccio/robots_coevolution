@@ -36,15 +36,27 @@ class Game:
         self.robot2 = Robot(x=500, y=500, energy_points=self.energy_points, color=(255, 0, 0), render=self.render)
         self.game_over = False
         self.winner = None
+        self.collision_kill = False  # True if game ended by collision
         self.frame_count = 0
         self.max_frames = 2000  # Max game duration
 
     def check_game_over(self):
         self.frame_count += 1
-        # Collision or timeout - winner is always determined by energy
-        if (self.robot1.alive == False or self.robot2.alive == False or
-            self.frame_count >= self.max_frames):
+        # Check for collision first
+        if self.robot1.alive == False or self.robot2.alive == False:
             self.game_over = True
+            self.collision_kill = True
+            # In a collision, both robots die - winner has more energy
+            if self.robot1.energy > self.robot2.energy:
+                self.winner = 1
+            elif self.robot2.energy > self.robot1.energy:
+                self.winner = 2
+            else:
+                self.winner = 0  # Draw (same energy)
+        # Check for timeout
+        elif self.frame_count >= self.max_frames:
+            self.game_over = True
+            self.collision_kill = False
             if self.robot1.energy > self.robot2.energy:
                 self.winner = 1
             elif self.robot2.energy > self.robot1.energy:
