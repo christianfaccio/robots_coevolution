@@ -1,146 +1,125 @@
 import pygame
+import enum
 import math
-from .bullet import Bullet
 
+SCREEN_WIDTH = 1200
+SCREEN_HEIGHT = 1000
+ROBOT_SIZE = 40
 
-class Robot(pygame.sprite.Sprite):
-    def __init__(self, x, y, color):
-        super().__init__()
-        self.x = x
-        self.y = y
+directions = enum.Enum('directions', 'LEFT STRAIGHT RIGHT')
+
+class Robot:
+    def __init__(self, x, y, energy_points, color=(0, 0, 255), render=True):
+        self.render = render
         self.color = color
-        self.id = id(self)  # Unique identifier
-
-        # Physical properties
-        self.length = 1 # Robot is a square for simplicity
-
-        # Combat properties
-        self.shoot_angle = 0  # Direction to shoot
-        self.health = 100
+        self.vel_vector = pygame.math.Vector2(0.8, 0)
+        self.speed_factor = 6
+        self.angle = 0
+        self.rotation_vel = 5
+        self.direction = directions.STRAIGHT
         self.alive = True
-        self.shoot_cooldown = 0
-        self.cooldown_time = 30  # Frames between shots
+        self.radars = []
+        self.energy_points = energy_points
+        self.energy = 0
 
-        # Sensor configuration: circle with range
-        self.radar_range = 150
+        self.rect = pygame.Rect(0, 0, ROBOT_SIZE, ROBOT_SIZE)
+        self.rect.center = (x, y)
 
-        # Create surface for the robot
-        self.image = pygame.Surface((self.length, self.length), pygame.SRCALPHA)
-        pygame.draw.rect(self.image, self.color, (0, 0, self.length, self.length))
-        self.rect = self.image.get_rect(center=(int(self.x), int(self.y)))
 
-    # TODO: check for collision with other robot
-    def update(self, arena_width, arena_height, action=None, other_robot=None):
-        """Update robot state based on action.
+    def update(self, other_robot, screen=None):
+        self.radars.clear()
+        self.translate()
+        self.rotate()
+        self.radar(other_robot, screen)
+        self.collision(other_robot)
 
-        action: dict with keys:
-            - 'robot_movement': [UP: 0, DOWN: 1, LEFT: 2, RIGHT: 3, NONE: -1]
-            - 'turret_rotation': [0, ..., (2*arena_width + 2*arena_height + 1)] -> perimeter values and a NONE option
-            - 'shoot': bool for shooting
-        other_robot: the other Robot object to check collision against
-        """
-        if not self.alive:
-            return None
+    def translate(self):
+        self.rect.center += self.vel_vector * self.speed_factor
+        # if robot is out of screen, keep it inside
+        if self.rect.left < 0:
+            self.rect.left = 0
+        if self.rect.right > SCREEN_WIDTH:
+            self.rect.right = SCREEN_WIDTH
+        if self.rect.top < 0:
+            self.rect.top = 0
+        if self.rect.bottom > SCREEN_HEIGHT:
+            self.rect.bottom = SCREEN_HEIGHT
 
-        bullet = None
+    def rotate(self):
+        if self.direction == directions.LEFT:
+            self.angle += self.rotation_vel
+            self.vel_vector.rotate_ip(self.rotation_vel)
+        elif self.direction == directions.RIGHT:
+            self.angle -= self.rotation_vel
+            self.vel_vector.rotate_ip(-self.rotation_vel)
 
-        if action:
-            # Movement
-            if 'robot_movement' in action:
-                new_x, new_y = self.x, self.y
-                if action['robot_movement'] == 0:  # UP
-                    new_y -= 1
-                elif action['robot_movement'] == 1:  # DOWN
-                    new_y += 1
-                elif action['robot_movement'] == 2:  # LEFT
-                    new_x -= 1
-                elif action['robot_movement'] == 3:  # RIGHT
-                    new_x += 1
-
-                # Only move if not colliding with other robot
-                if other_robot is None or (new_x, new_y) != (other_robot.x, other_robot.y):
-                    self.x, self.y = new_x, new_y
-
-            # Rotation: turret value maps to discrete angles (0 to N_DIRECTIONS-1)
-            # -1 means no rotation (keep current angle)
-            N_DIRECTIONS = 16  # Number of discrete aiming directions
-            if 'turret' in action and action['turret'] >= 0:
-                self.shoot_angle = (action['turret'] / N_DIRECTIONS) * 2 * math.pi
-
-            # Shooting -> NOTE: always shoot when possible for now (shoot will always be True)
-            if action.get('shoot', False) and self.shoot_cooldown <= 0:
-                bullet = self.shoot()
-                self.shoot_cooldown = self.cooldown_time
-
-        # Boundary collision
-        self.x = max(0, min(self.x, arena_width))
-        self.y = max(0, min(self.y, arena_height))
-
-        # Update rect position
-        self.rect.center = (int(self.x), int(self.y))
-
-        # Decrease shoot cooldown
-        if self.shoot_cooldown > 0:
-            self.shoot_cooldown -= 1
-
-        return bullet
-
-    def shoot(self):
-        """Create a bullet traveling in the robot's facing direction."""
-        bullet_x = self.x
-        bullet_y = self.y
-        return Bullet(bullet_x, bullet_y, self.shoot_angle, self.id)
-
-    def take_damage(self, damage):
-        """Reduce health when hit."""
-        self.health -= damage
-        if self.health <= 0:
-            self.health = 0
+    def collision(self, other_robot):
+        '''
+        The robot dies if it collides with another robot.
+        '''
+        if self.rect.colliderect(other_robot.rect):
             self.alive = False
+        # Check collision with energy points
+        for energy_point in self.energy_points:
+            if self.rect.colliderect(energy_point.rect):
+                self.energy += 100
+                self.energy_points.remove(energy_point)
+    
+    def radar(self, other_robot, screen=None):
+        '''
+        Measure distance to walls, energy points and enemy robot in the direction of the radars.
+        '''
+        length = 0
+        x = int(self.rect.center[0])
+        y = int(self.rect.center[1])
 
-    def get_state(self, other_robot, arena_width, arena_height):
-        """Get the robot's state as input for AI/neural network.
+        # Distance to walls
+        self.radars.append(SCREEN_WIDTH - x)  # right wall
+        self.radars.append(x)                 # left wall
+        self.radars.append(SCREEN_HEIGHT - y) # bottom wall
+        self.radars.append(y)                 # top wall
 
-        Returns a dictionary. The bullets' states are taken from outside.
-        """
-        # TODO: check for other_robot being alive
-        state = {
-            'x': self.x / arena_width, # standardize to 0-1
-            'y': self.y / arena_height, # standardize to 0-1
-            'enemy_x': other_robot.x / arena_width, # standardize to 0-1
-            'enemy_y': other_robot.y / arena_height, # standardize to 0-1
-            'time_to_shoot': self.shoot_cooldown / self.cooldown_time, 
-        }
-        return state
+        if self.render and screen:
+            pygame.draw.line(screen, (255, 0, 0), (x, y), (SCREEN_WIDTH, y), 1)  # right
+            pygame.draw.circle(screen, (255, 0, 0), (x, y), 4)
+            pygame.draw.line(screen, (255, 0, 0), (x, y), (0, y), 1)             # left
+            pygame.draw.circle(screen, (255, 0, 0), (x, y), 4)
+            pygame.draw.line(screen, (255, 0, 0), (x, y), (x, SCREEN_HEIGHT), 1) # bottom
+            pygame.draw.circle(screen, (255, 0, 0), (x, y), 4)
+            pygame.draw.line(screen, (255, 0, 0), (x, y), (x, 0), 1)              # top
+            pygame.draw.circle(screen, (255, 0, 0), (x, y), 4)
 
-    def draw(self, screen, scale=1):
-        """Draw the robot on screen."""
-        scaled_x = int(self.x * scale)
-        scaled_y = int(self.y * scale)
-        scaled_size = max(self.length * scale, 4)  # Minimum size for visibility
+        # Distance to closest energy point
+        closest = None
+        for energy_point in self.energy_points:
+            dist = math.hypot(energy_point.rect.center[0] - x, energy_point.rect.center[1] - y)
+            if length == 0 or dist < length:
+                length = dist
+                closest = energy_point
+        self.radars.append(int(length))
 
-        if not self.alive:
-            # Draw dead robot as gray
-            pygame.draw.rect(screen, (100, 100, 100),
-                           (scaled_x - scaled_size // 2, scaled_y - scaled_size // 2,
-                            scaled_size, scaled_size))
-            return
+        if self.render and screen and closest is not None:
+            pygame.draw.line(screen, (0, 255, 0), (x, y), (closest.rect.center[0], closest.rect.center[1]), 1)
+            pygame.draw.circle(screen, (0, 255, 0), (closest.rect.center[0], closest.rect.center[1]), 4)
 
-        # Draw robot body -> square
-        pygame.draw.rect(screen, self.color,
-                        (scaled_x - scaled_size // 2, scaled_y - scaled_size // 2,
-                         scaled_size, scaled_size))
+        # Distance to enemy robot
+        dist = math.hypot(other_robot.rect.center[0] - x, other_robot.rect.center[1] - y)
+        self.radars.append(int(dist))
 
-        # Draw health bar above robot
-        bar_width = scaled_size * 4
-        bar_height = max(scaled_size // 2, 4)
-        bar_x = scaled_x - bar_width // 2
-        bar_y = scaled_y - scaled_size - 10
-
-        # Background (red)
-        pygame.draw.rect(screen, (255, 0, 0),
-                        (bar_x, bar_y, bar_width, bar_height))
-        # Health (green)
-        health_width = int(bar_width * (self.health / 100))
-        pygame.draw.rect(screen, (0, 255, 0),
-                        (bar_x, bar_y, health_width, bar_height))
+        if self.render and screen:
+            pygame.draw.line(screen, (0, 0, 255), (x, y), (other_robot.rect.center[0], other_robot.rect.center[1]), 1)
+            pygame.draw.circle(screen, (0, 0, 255), (other_robot.rect.center[0], other_robot.rect.center[1]), 4)
+    
+    def state(self, other_robot):
+        self.radars.clear()
+        self.radar(other_robot)
+        # walls (4), closest energy point (1), enemy robot (1), my energy (1), enemy energy (1)
+        inputs = []
+        for radar in self.radars:
+            inputs.append(radar)
+        inputs.append(self.energy)
+        inputs.append(other_robot.energy)
+        return inputs
+    
+    def draw(self, screen):
+        pygame.draw.rect(screen, self.color, self.rect)
