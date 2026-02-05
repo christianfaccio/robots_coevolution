@@ -1,6 +1,6 @@
 import pygame
 
-ENERGY_SIZE = 15
+ENERGY_SIZE = 10
 
 class EnergyPoint:
     def __init__(self, position, render=True):

@@ -1,40 +1,48 @@
 import pygame
-import enum
 import math
 
-SCREEN_WIDTH = 1200
-SCREEN_HEIGHT = 1000
-ROBOT_SIZE = 40
-
-directions = enum.Enum('directions', 'LEFT STRAIGHT RIGHT')
+SCREEN_WIDTH = 600
+SCREEN_HEIGHT = 600
+ROBOT_SIZE = 20
 
 class Robot:
-    def __init__(self, x, y, energy_points, color=(0, 0, 255), render=True):
+    def __init__(self, x, y, angle, energy_points, color=(0, 0, 255), render=True):
         self.render = render
         self.color = color
         self.vel_vector = pygame.math.Vector2(0.8, 0)
-        self.speed_factor = 6
-        self.angle = 0
-        self.rotation_vel = 5
-        self.direction = directions.STRAIGHT
+        self.vel_vector.rotate_ip(-angle)  # rotate to match initial angle
+        self.angle = angle
         self.alive = True
         self.radars = []
         self.energy_points = energy_points
         self.energy = 0
+        self.sensor_angles = [-150, -60, 0, 60, 150]  # taken from the current angle of the robot
+        self.opponent_range_sensor_length = 50
+        self.energy_range_sensor_length = 30
 
         self.rect = pygame.Rect(0, 0, ROBOT_SIZE, ROBOT_SIZE)
         self.rect.center = (x, y)
 
 
-    def update(self, other_robot, screen=None):
-        self.radars.clear()
-        self.translate()
-        self.rotate()
-        self.radar(other_robot, screen)
+    def update(self, left, right, forward, other_robot):
+        # Compute movement parameters
+        theta = math.degrees(0.24 * (left - right))  # ~13.75° max turn
+        forward_distance = 1.33 * forward  # max 1.33 pixels per step
+
+        # Half turn -> forward -> half turn (paper's combined motion)
+        self.rotate(theta / 2)
+        self.translate(forward_distance)
+        self.rotate(theta / 2)
+
+        # Energy cost proportional to movement
+        self.energy -= abs(theta) + forward_distance
         self.collision(other_robot)
 
-    def translate(self):
-        self.rect.center += self.vel_vector * self.speed_factor
+    def translate(self, distance):
+        if distance > 0:
+            direction = self.vel_vector.normalize()
+            self.rect.center += direction * distance
+
         # if robot is out of screen, keep it inside
         if self.rect.left < 0:
             self.rect.left = 0
@@ -45,13 +53,12 @@ class Robot:
         if self.rect.bottom > SCREEN_HEIGHT:
             self.rect.bottom = SCREEN_HEIGHT
 
-    def rotate(self):
-        if self.direction == directions.LEFT:
-            self.angle += self.rotation_vel
-            self.vel_vector.rotate_ip(self.rotation_vel)
-        elif self.direction == directions.RIGHT:
-            self.angle -= self.rotation_vel
-            self.vel_vector.rotate_ip(-self.rotation_vel)
+    def rotate(self, theta):
+        '''
+        Rotate the robot by theta degrees.
+        '''
+        self.angle += theta
+        self.vel_vector.rotate_ip(-theta)
 
     def collision(self, other_robot):
         '''
@@ -62,65 +69,108 @@ class Robot:
         # Check collision with energy points
         for energy_point in self.energy_points:
             if self.rect.colliderect(energy_point.rect):
-                self.energy += 1
+                self.energy += 500 # as paper states
                 self.energy_points.remove(energy_point)
     
-    def radar(self, other_robot, screen=None):
+    def radar(self, other_robot):
         '''
-        Measure distance to walls, energy points and enemy robot in the direction of the radars.
+        Measure distances (paper: 5 opponent + 5 food + 1 wall = 11 sensors).
+        Returns:
+        - 5 distances to opponent (0 if no opponent in sensor range)
+        - 5 distances to energy points (0 if no energy point in sensor range)
+        - 1 distance to wall (forward-facing only)
         '''
-        length = 0
         x = int(self.rect.center[0])
         y = int(self.rect.center[1])
 
-        # Distance to walls
-        self.radars.append(SCREEN_WIDTH - x)  # right wall
-        self.radars.append(x)                 # left wall
-        self.radars.append(SCREEN_HEIGHT - y) # bottom wall
-        self.radars.append(y)                 # top wall
+        for sensor_angle in self.sensor_angles:
+            # Opponent radar
+            length = 0
+            sensor_rad = math.radians(self.angle + sensor_angle)
+            dx = math.cos(sensor_rad)
+            dy = -math.sin(sensor_rad)
 
-        if self.render and screen:
-            pygame.draw.line(screen, (255, 0, 0), (x, y), (SCREEN_WIDTH, y), 1)  # right
-            pygame.draw.circle(screen, (255, 0, 0), (x, y), 4)
-            pygame.draw.line(screen, (255, 0, 0), (x, y), (0, y), 1)             # left
-            pygame.draw.circle(screen, (255, 0, 0), (x, y), 4)
-            pygame.draw.line(screen, (255, 0, 0), (x, y), (x, SCREEN_HEIGHT), 1) # bottom
-            pygame.draw.circle(screen, (255, 0, 0), (x, y), 4)
-            pygame.draw.line(screen, (255, 0, 0), (x, y), (x, 0), 1)              # top
-            pygame.draw.circle(screen, (255, 0, 0), (x, y), 4)
+            while length < self.opponent_range_sensor_length:
+                length += 1
+                target_x = int(x + dx * length)
+                target_y = int(y + dy * length)
 
-        # Distance to closest energy point
-        closest = None
-        for energy_point in self.energy_points:
-            dist = math.hypot(energy_point.rect.center[0] - x, energy_point.rect.center[1] - y)
-            if length == 0 or dist < length:
-                length = dist
-                closest = energy_point
-        self.radars.append(int(length))
+                if target_x < 0 or target_x >= SCREEN_WIDTH or target_y < 0 or target_y >= SCREEN_HEIGHT:
+                    break
 
-        if self.render and screen and closest is not None:
-            pygame.draw.line(screen, (0, 255, 0), (x, y), (closest.rect.center[0], closest.rect.center[1]), 1)
-            pygame.draw.circle(screen, (0, 255, 0), (closest.rect.center[0], closest.rect.center[1]), 4)
+                if other_robot.rect.collidepoint(target_x, target_y):
+                    break
 
-        # Distance to enemy robot
-        dist = math.hypot(other_robot.rect.center[0] - x, other_robot.rect.center[1] - y)
-        self.radars.append(int(dist))
+            self.radars.append(length if length < self.opponent_range_sensor_length else 0)
 
-        if self.render and screen:
-            pygame.draw.line(screen, (0, 0, 255), (x, y), (other_robot.rect.center[0], other_robot.rect.center[1]), 1)
-            pygame.draw.circle(screen, (0, 0, 255), (other_robot.rect.center[0], other_robot.rect.center[1]), 4)
+            # Energy radar
+            length = 0
+            while length < self.energy_range_sensor_length:
+                length += 1
+                target_x = int(x + dx * length)
+                target_y = int(y + dy * length)
+
+                if target_x < 0 or target_x >= SCREEN_WIDTH or target_y < 0 or target_y >= SCREEN_HEIGHT:
+                    break
+
+                hit_energy = False
+                for energy_point in self.energy_points:
+                    if energy_point.rect.collidepoint(target_x, target_y):
+                        hit_energy = True
+                        break
+                if hit_energy:
+                    break
+
+            self.radars.append(length if length < self.energy_range_sensor_length else 0)
+
+        # Single wall sensor (forward-facing, as per paper)
+        forward_rad = math.radians(self.angle)
+        dx = math.cos(forward_rad)
+        dy = -math.sin(forward_rad)
+        length = 0
+        while True:
+            length += 1
+            target_x = int(x + dx * length)
+            target_y = int(y + dy * length)
+            if target_x < 0 or target_x >= SCREEN_WIDTH or target_y < 0 or target_y >= SCREEN_HEIGHT:
+                break
+        self.radars.append(length)
     
-    def state(self, other_robot, remaining_time=1.0):
+    def state(self, other_robot):
+        '''  
+        Total of 12 inputs:
+        - 5 sensors distances to opponent
+        - 5 sensors distances to energy points
+        - 1 sensor distance to wall
+        - difference in energy levels
+        '''
         self.radars.clear()
         self.radar(other_robot)
-        # walls (4), closest energy point (1), enemy robot (1), my energy (1), enemy energy (1), remaining time (1)
+        
         inputs = []
-        for radar in self.radars:
-            inputs.append(radar)
-        inputs.append(self.energy)
-        inputs.append(other_robot.energy)
-        inputs.append(remaining_time)  # Normalized [0, 1] where 1 = full time, 0 = time's up
+        inputs.extend([radar for radar in self.radars])  # 11 inputs from radars
+        energy_diff = self.energy - other_robot.energy
+        inputs.append(energy_diff)  # 1 input for energy difference
+
         return inputs
     
     def draw(self, screen):
-        pygame.draw.rect(screen, self.color, self.rect)
+        pygame.draw.circle(screen, self.color, self.rect.center, ROBOT_SIZE // 2)
+        # draw direction white line
+        end_pos = (self.rect.center[0] + self.vel_vector.x * ROBOT_SIZE,
+                   self.rect.center[1] + self.vel_vector.y * ROBOT_SIZE)
+        pygame.draw.line(screen, (255, 255, 255), self.rect.center, end_pos, 2)
+        # draw circle for radar range
+        pygame.draw.circle(screen, (255, 255, 255), self.rect.center, self.opponent_range_sensor_length, 1)
+        pygame.draw.circle(screen, (0, 255, 0), self.rect.center, self.energy_range_sensor_length, 1)
+        # draw sensors
+        for sensor_angle in self.sensor_angles:
+            sensor_rad = math.radians(self.angle + sensor_angle)
+            dx = math.cos(sensor_rad)
+            dy = -math.sin(sensor_rad)
+            end_pos = (self.rect.center[0] + dx * self.opponent_range_sensor_length,
+                       self.rect.center[1] + dy * self.opponent_range_sensor_length)
+            pygame.draw.circle(screen, (255, 255, 255), end_pos, 3)
+            end_pos_energy = (self.rect.center[0] + dx * self.energy_range_sensor_length,
+                       self.rect.center[1] + dy * self.energy_range_sensor_length)
+            pygame.draw.circle(screen, (0, 255, 0), end_pos_energy, 3)

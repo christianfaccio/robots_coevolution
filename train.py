@@ -65,14 +65,9 @@ def match(game, net1, net2):
     """
     game.reset()
     while not game.game_over:
-        # Calculate remaining time as normalized value [0, 1]
-        remaining_time = 1.0 - (game.frame_count / game.max_frames)
-
-        action1 = net1.activate(game.robot1.state(game.robot2, remaining_time))
-        res1 = action1.index(max(action1))
-        action2 = net2.activate(game.robot2.state(game.robot1, remaining_time))
-        res2 = action2.index(max(action2))
-        game.play(res1, res2)
+        output1 = net1.activate(game.robot1.state(game.robot2))
+        output2 = net2.activate(game.robot2.state(game.robot1))
+        game.play(output1, output2)
         game.check_game_over()
 
     energy1 = game.robot1.energy

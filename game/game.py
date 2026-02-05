@@ -1,7 +1,7 @@
 import pygame
 import random
 from .energy import EnergyPoint
-from .robot import Robot, SCREEN_WIDTH, SCREEN_HEIGHT, directions
+from .robot import Robot, SCREEN_WIDTH, SCREEN_HEIGHT
 
 class Game:
     def __init__(self, render=True):
@@ -13,7 +13,7 @@ class Game:
         if self.render:
             pygame.init()
             self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-            pygame.display.set_caption("Robot Survivor")
+            pygame.display.set_caption("Robot War")
             self.clock = pygame.time.Clock()
             self.font = pygame.font.Font(None, 36)
 
@@ -24,21 +24,23 @@ class Game:
         Reset game to initial deterministic position.
         '''
         self.energy_points = [
-            EnergyPoint((100, 50), self.render),
-            EnergyPoint((275, 497), self.render),
-            EnergyPoint((571, 300), self.render),
-            EnergyPoint((400, 235), self.render),
-            EnergyPoint((800, 600), self.render),
-            EnergyPoint((1000, 800), self.render),
-            EnergyPoint((600, 900), self.render)
+            EnergyPoint((300, 75), self.render),
+            EnergyPoint((150, 200), self.render),
+            EnergyPoint((450, 200), self.render),
+            EnergyPoint((50, 300), self.render),
+            EnergyPoint((550, 300), self.render),
+            EnergyPoint((150, 400), self.render),
+            EnergyPoint((450, 400), self.render),
+            EnergyPoint((250, 500), self.render),
+            EnergyPoint((350, 500), self.render)
             ]
-        self.robot1 = Robot(x=200, y=200, energy_points=self.energy_points, color=(0, 0, 255), render=self.render)
-        self.robot2 = Robot(x=500, y=500, energy_points=self.energy_points, color=(255, 0, 0), render=self.render)
+        self.robot1 = Robot(x=200, y=300, angle=180, energy_points=self.energy_points, color=(0, 0, 255), render=self.render)
+        self.robot2 = Robot(x=400, y=300, angle=0, energy_points=self.energy_points, color=(255, 0, 0), render=self.render)
         self.game_over = False
         self.winner = None
         self.collision_kill = False  # True if game ended by collision
         self.frame_count = 0
-        self.max_frames = 2000  # Max game duration
+        self.max_frames = 750  # Max game duration
 
     def check_game_over(self):
         self.frame_count += 1
@@ -64,20 +66,22 @@ class Game:
             else:
                 self.winner = 0  # Draw (same energy)
     
-    def play(self, action1=None, action2=None):
-        directions_list = list(directions)
-        self.robot1.direction = directions_list[action1]
-        self.robot2.direction = directions_list[action2]
+    def play(self, action1, action2):
+        '''
+        action1, action2: tuples of (left, right, forward) continuous floats in [0,1]
+        '''
+        left1, right1, forward1 = action1
+        left2, right2, forward2 = action2
 
         if self.render:
             self.robot1.draw(self.screen)
-            self.robot1.update(self.robot2, self.screen)
+            self.robot1.update(left1, right1, forward1, self.robot2)
             self.robot2.draw(self.screen)
-            self.robot2.update(self.robot1, self.screen)
+            self.robot2.update(left2, right2, forward2, self.robot1)
             pygame.display.update()
         else:
-            self.robot1.update(self.robot2)
-            self.robot2.update(self.robot1)
+            self.robot1.update(left1, right1, forward1, self.robot2)
+            self.robot2.update(left2, right2, forward2, self.robot1)
 
 if __name__ == '__main__':
     game = Game(render=True)
@@ -93,10 +97,10 @@ if __name__ == '__main__':
         game.robot1.draw(game.screen)
         game.robot2.draw(game.screen)
         pygame.display.flip()
-        game.clock.tick(30)
+        game.clock.tick(30) 
 
         if not game.game_over:
-            action1 = random.randint(0,2)
-            action2 = random.randint(0,2)
+            action1 = (random.random(), random.random(), random.random())
+            action2 = (random.random(), random.random(), random.random())
             game.play(action1, action2)
             game.check_game_over()
