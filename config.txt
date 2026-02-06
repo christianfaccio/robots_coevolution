@@ -84,8 +84,8 @@ single_structural_mutation = false
 structural_mutation_surer = default
 
 [DefaultSpeciesSet]
-# Paper: initial delta_t = 3.0
-compatibility_threshold = 3.0
+# Paper: initial delta_t = 3.0, but we use higher to avoid too many species
+compatibility_threshold = 4.0
 
 [DefaultStagnation]
 species_fitness_func = max
@@ -98,4 +98,4 @@ species_elitism      = 2
 elitism            = 1
 # Paper: 25% offspring from mutation only (75% survival for crossover)
 survival_threshold = 0.2
-min_species_size = 5
+min_species_size = 2

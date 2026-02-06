@@ -19,7 +19,7 @@ class Game:
 
         self.reset()
 
-    def reset(self):
+    def reset(self, extra_energy_1=None, extra_energy_2=None):
         '''  
         Reset game to initial deterministic position.
         '''
@@ -34,11 +34,15 @@ class Game:
             EnergyPoint((250, 500), self.render),
             EnergyPoint((350, 500), self.render)
             ]
+        if extra_energy_1:
+            self.energy_points.append(EnergyPoint(extra_energy_1, self.render))
+        if extra_energy_2:
+            self.energy_points.append(EnergyPoint(extra_energy_2, self.render))
+            
         self.robot1 = Robot(x=200, y=300, angle=180, energy_points=self.energy_points, color=(0, 0, 255), render=self.render)
         self.robot2 = Robot(x=400, y=300, angle=0, energy_points=self.energy_points, color=(255, 0, 0), render=self.render)
         self.game_over = False
         self.winner = None
-        self.collision_kill = False  # True if game ended by collision
         self.frame_count = 0
         self.max_frames = 750  # Max game duration
 
@@ -47,24 +51,15 @@ class Game:
         # Check for collision first
         if self.robot1.alive == False or self.robot2.alive == False:
             self.game_over = True
-            self.collision_kill = True
-            # In a collision, both robots die - winner has more energy
-            if self.robot1.energy > self.robot2.energy:
+            if self.robot1.energy >= self.robot2.energy:
                 self.winner = 1
-            elif self.robot2.energy > self.robot1.energy:
-                self.winner = 2
             else:
-                self.winner = 0  # Draw (same energy)
+                self.winner = 2
+
         # Check for timeout
         elif self.frame_count >= self.max_frames:
             self.game_over = True
-            self.collision_kill = False
-            if self.robot1.energy > self.robot2.energy:
-                self.winner = 1
-            elif self.robot2.energy > self.robot1.energy:
-                self.winner = 2
-            else:
-                self.winner = 0  # Draw (same energy)
+            self.winner = 0  
     
     def play(self, action1, action2):
         '''
@@ -82,6 +77,7 @@ class Game:
         else:
             self.robot1.update(left1, right1, forward1, self.robot2)
             self.robot2.update(left2, right2, forward2, self.robot1)
+        self.check_game_over()
 
 if __name__ == '__main__':
     game = Game(render=True)

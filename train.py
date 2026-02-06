@@ -1,181 +1,187 @@
 import os
 import copy
 import neat
+import random
 import pickle
 from tqdm import tqdm
 from game.game import Game
 
-
-class HallOfFame:
+def match(game, net1, net2, inv=False, extra_energy_1=None, extra_energy_2=None):
     """
-    Maintains a collection of the best genomes from past generations.
-    This prevents 'forgetting' by ensuring new strategies must still beat historical champions.
+    Run a match and return the points for the HOST genome:
+    - 1 point for victory
+    - 0 points for defeat
+    - 0 points if the game ends by timeout
+
+    inv flag indicates if the host genome is playing as robot1 (inv=False) or robot2 (inv=True)
     """
-    def __init__(self, max_size=10):
-        self.max_size = max_size
-        self.members = []  # List of (genome, network) tuples
-        self.generation_added = []  # Track when each member was added
-
-    def update(self, genomes, config, current_generation):
-        """
-        Add the best genome from the current generation to the hall of fame.
-        Uses fitness diversity to avoid adding too similar individuals.
-        """
-        if not genomes:
-            return
-
-        # Find the best genome
-        best_genome = max(genomes, key=lambda g: g[1].fitness if g[1].fitness else 0)
-        _, genome = best_genome
-
-        if genome.fitness is None:
-            return
-
-        # Create a deep copy to preserve the genome state
-        genome_copy = copy.deepcopy(genome)
-        net = neat.nn.FeedForwardNetwork.create(genome_copy, config)
-
-        # Add to hall of fame
-        self.members.append((genome_copy, net))
-        self.generation_added.append(current_generation)
-
-        # If over capacity, remove oldest (or weakest) member
-        if len(self.members) > self.max_size:
-            # Remove the oldest member (FIFO strategy)
-            self.members.pop(0)
-            self.generation_added.pop(0)
-
-    def get_networks(self):
-        """Return list of neural networks for hall of fame members."""
-        return [net for _, net in self.members]
-
-    def __len__(self):
-        return len(self.members)
-
-
-# Global hall of fame instance
-hall_of_fame = HallOfFame(max_size=10)
-
-
-def match(game, net1, net2):
-    """
-    Run a match and return (winner, energy1, energy2, collision_kill).
-    winner: 1 if player 1 wins, 2 if player 2 wins, 0 for draw
-    collision_kill: True if game ended by collision
-    """
-    game.reset()
+    game.reset(extra_energy_1=extra_energy_1, extra_energy_2=extra_energy_2)
+    net1.reset()
+    net2.reset()
     while not game.game_over:
-        output1 = net1.activate(game.robot1.state(game.robot2))
-        output2 = net2.activate(game.robot2.state(game.robot1))
+        if not inv:
+            output1 = net1.activate(game.robot1.state(game.robot2))
+            output2 = net2.activate(game.robot2.state(game.robot1))
+        else:
+            output1 = net2.activate(game.robot1.state(game.robot2))
+            output2 = net1.activate(game.robot2.state(game.robot1))
         game.play(output1, output2)
-        game.check_game_over()
-
-    energy1 = game.robot1.energy
-    energy2 = game.robot2.energy
-    collision_kill = game.collision_kill
 
     if game.winner == 1:
-        return 1, energy1, energy2, collision_kill
+        return (1, 0) if not inv else (0, 1)
     elif game.winner == 2:
-        return 2, energy1, energy2, collision_kill
+        return (0, 1) if not inv else (1, 0)
     else:
-        return 0, energy1, energy2, collision_kill
+        return (0, 0)
+    
+def get_species_champions(pop, n=4):
+    champions = []
+    for species in pop.species.species.values():
+        # Skip empty species
+        if not species.members:
+            continue
+        # Find best genome in this species
+        champion = max(species.members.values(), key=lambda g: g.fitness or 0)
+        champions.append(champion)
 
+    # If we don't have enough species champions, fill from population
+    if len(champions) < n:
+        champions = list(pop.population.values())
 
-def eval_genomes(genomes, config):
+    # Sort by fitness and return top n
+    champions.sort(key=lambda g: g.fitness or 0, reverse=True)
+    return champions[:n]
+
+def evaluate_against_parasites(host_pop, parasite_pop, hall_of_fame, config, desc="Evaluating"):
+    '''
+    Host population is evaluated against a sample of parasites from the parasite population:
+    - 4 highest species champions
+    - 8 random selected genomes from an hall of fame of all generations' champions
+    '''
+    species_champions = get_species_champions(parasite_pop, n=4)
+    hof_sample = random.sample(hall_of_fame, min(8, len(hall_of_fame))) if hall_of_fame else []
+    parasite_sample = species_champions + hof_sample
+
+    parasite_nets = [neat.nn.RecurrentNetwork.create(g, config) for g in parasite_sample]
+
     game = Game(render=False)
-    ge = []
-    nets = []
-    for _, genome in genomes:
-        ge.append(genome)
-        nets.append(neat.nn.FeedForwardNetwork.create(genome, config))
-        genome.fitness = 0.0
+    for host_genome_id, host_genome in tqdm(host_pop.population.items(), desc=desc, leave=False):
+        host_net = neat.nn.RecurrentNetwork.create(host_genome, config)
+        host_genome.fitness = 0
+        for parasite_net in parasite_nets:
+            f1, _ = match(game, host_net, parasite_net)
+            host_genome.fitness += f1
+            f1, _ = match(game, host_net, parasite_net, inv=True)
+            host_genome.fitness += f1
 
-    n = len(ge)
-    hof_nets = hall_of_fame.get_networks()
-    hof_size = len(hof_nets)
+    champion_id, champion_genome = max(host_pop.population.items(), key=lambda item: item[1].fitness or 0)
+    hall_of_fame.append(copy.deepcopy(champion_genome))
+    return champion_genome
 
-    # Calculate total matches: round-robin + hall of fame matches
-    round_robin_matches = n * (n - 1) // 2
-    hof_matches = n * hof_size
-    total_matches = round_robin_matches + hof_matches
+EXTRA_ENERGY_POINTS_RIGHT = [
+    (350, 100), (450, 100), (550, 100),
+    (350, 233), (450, 233), (550, 233),
+    (350, 366), (450, 366), (550, 366),
+    (350, 500), (450, 500), (550, 500)
+]
+EXTRA_ENERGY_POINTS_LEFT = [
+    (250, 100), (150, 100), (50, 100),
+    (250, 233), (150, 233), (50, 233),
+    (250, 366), (150, 366), (50, 366),
+    (250, 500), (150, 500), (50, 500)
+]
 
-    collision_bonus = 5  # Extra reward for winning by collision (aggressive play)
-    hof_weight = 2.0  # Hall of fame matches are worth more (to maintain pressure)
+def get_gen_champion(champion1, champion2, config):
+    game = Game(render=False)
+    net1 = neat.nn.RecurrentNetwork.create(champion1, config)
+    net2 = neat.nn.RecurrentNetwork.create(champion2, config)
+    fitness1 = 0
+    fitness2 = 0
+    for extra_left in EXTRA_ENERGY_POINTS_LEFT:
+        for extra_right in EXTRA_ENERGY_POINTS_RIGHT:
+            f1, f2 = match(game, net1, net2, extra_energy_1=extra_left, extra_energy_2=extra_right)
+            fitness1 += f1
+            fitness2 += f2
+            f1, f2 = match(game, net1, net2, inv=True, extra_energy_1=extra_left, extra_energy_2=extra_right)
+            fitness1 += f1
+            fitness2 += f2
 
-    with tqdm(total=total_matches, desc="Tournament", leave=False) as pbar:
-        # Round-robin tournament within current population
-        for i in range(n):
-            for j in range(i + 1, n):
-                result, energy1, energy2, collision_kill = match(game, nets[i], nets[j])
+    if fitness1 >= fitness2:
+        return champion1
+    else:
+        return champion2
 
-                if result == 1:
-                    ge[i].fitness += 10
-                    if collision_kill:
-                        ge[i].fitness += collision_bonus
-                elif result == 2:
-                    ge[j].fitness += 10
-                    if collision_kill:
-                        ge[j].fitness += collision_bonus
-                else:
-                    ge[i].fitness += 1
-                    ge[j].fitness += 1
+def dominance_tournament(generation_champion, dominant_strategies, config):
+    """
+    Test if generation_champion beats ALL previous dominant strategies.
+    If so, add it to the dominant strategies list.
+    """
+    # First generation champion is automatically the first dominant strategy
+    if not dominant_strategies:
+        dominant_strategies.append(copy.deepcopy(generation_champion))
+        return
 
-                ge[i].fitness += energy1
-                ge[j].fitness += energy2
+    game = Game(render=False)
+    net_champion = neat.nn.RecurrentNetwork.create(generation_champion, config)
 
-                pbar.update(1)
+    for dominant_strategy in dominant_strategies:
+        net_dominant = neat.nn.RecurrentNetwork.create(dominant_strategy, config)
+        fitness_champion, fitness_dominant = 0, 0
 
-        # Play against Hall of Fame members
-        if hof_size > 0:
-            for i in range(n):
-                for hof_net in hof_nets:
-                    result, energy1, energy2, collision_kill = match(game, nets[i], hof_net)
+        for extra_left in EXTRA_ENERGY_POINTS_LEFT:
+            for extra_right in EXTRA_ENERGY_POINTS_RIGHT:
+                f1, f2 = match(game, net_champion, net_dominant, extra_energy_1=extra_left, extra_energy_2=extra_right)
+                fitness_champion += f1
+                fitness_dominant += f2
+                f1, f2 = match(game, net_champion, net_dominant, inv=True, extra_energy_1=extra_left, extra_energy_2=extra_right)
+                fitness_champion += f1
+                fitness_dominant += f2
 
-                    # Weighted rewards for hall of fame matches
-                    if result == 1:
-                        ge[i].fitness += 10 * hof_weight
-                        if collision_kill:
-                            ge[i].fitness += collision_bonus * hof_weight
-                    elif result == 2:
-                        # Lost to hall of fame - no penalty, just no reward
-                        pass
-                    else:
-                        ge[i].fitness += 1 * hof_weight
+        # Must beat (not just tie) each dominant strategy
+        if fitness_champion <= fitness_dominant:
+            return  # Failed to beat this one, not a new dominant strategy
 
-                    # Energy bonus (still counts but not weighted)
-                    ge[i].fitness += energy1
+    # Beat all previous dominant strategies
+    dominant_strategies.append(copy.deepcopy(generation_champion))
 
-                    pbar.update(1)
+def save_checkpoint(filepath, pop1, pop2, hall_of_fame1, hall_of_fame2, dominant_strategies, generation):
+    """Save training state to a checkpoint file."""
+    checkpoint = {
+        'pop1': pop1,
+        'pop2': pop2,
+        'hall_of_fame1': hall_of_fame1,
+        'hall_of_fame2': hall_of_fame2,
+        'dominant_strategies': dominant_strategies,
+        'generation': generation
+    }
+    with open(filepath, 'wb') as f:
+        pickle.dump(checkpoint, f)
 
-
-class HallOfFameReporter(neat.reporting.BaseReporter):
-    """Reporter that updates the Hall of Fame after each generation."""
-
-    def __init__(self, hof, config):
-        self.hall_of_fame = hof
-        self.config = config
-        self.current_generation = 0
-
-    def start_generation(self, generation):
-        self.current_generation = generation
-
-    def post_evaluate(self, config, population, species_set, best_genome):
-        # Convert population dict to list format expected by HallOfFame
-        genomes = [(gid, g) for gid, g in population.items()]
-        self.hall_of_fame.update(genomes, self.config, self.current_generation)
-        print(f"  Hall of Fame size: {len(self.hall_of_fame)}")
-
+def load_checkpoint(filepath):
+    """Load training state from a checkpoint file."""
+    with open(filepath, 'rb') as f:
+        checkpoint = pickle.load(f)
+    return (
+        checkpoint['pop1'],
+        checkpoint['pop2'],
+        checkpoint['hall_of_fame1'],
+        checkpoint['hall_of_fame2'],
+        checkpoint['dominant_strategies'],
+        checkpoint['generation']
+    )
 
 if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, default='config.txt', help='Path to NEAT config file')
-    parser.add_argument('--generations', type=int, default=100, help='Number of generations to train')
-    parser.add_argument('--checkpoint', type=str, default=None, help='Path to checkpoint file to resume from')
-    parser.add_argument('--hof-size', type=int, default=10, help='Hall of Fame size (max champions to keep)')
+    parser.add_argument('--generations', type=int, default=500, help='Number of generations to train')
+    parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint file to resume from')
+    parser.add_argument('--checkpoint-interval', type=int, default=10, help='Save checkpoint every N generations')
     args = parser.parse_args()
+
+    # Create checkpoints directory
+    os.makedirs('checkpoints', exist_ok=True)
 
     # Load configuration
     config = neat.Config(
@@ -186,63 +192,48 @@ if __name__ == '__main__':
         args.config
     )
 
-    # Initialize hall of fame with specified size
-    hall_of_fame = HallOfFame(max_size=args.hof_size)
-
-    if args.checkpoint:
-        # Resume from checkpoint
-        print(f"Resuming from checkpoint: {args.checkpoint}")
-        pop = neat.Checkpointer.restore_checkpoint(args.checkpoint)
-
-        # Try to load hall of fame if it exists
-        hof_path = 'checkpoints/hall_of_fame.pkl'
-        if os.path.exists(hof_path):
-            with open(hof_path, 'rb') as f:
-                hof_data = pickle.load(f)
-                # Rebuild networks for loaded genomes
-                for genome, gen_added in zip(hof_data['genomes'], hof_data['generations']):
-                    net = neat.nn.FeedForwardNetwork.create(genome, config)
-                    hall_of_fame.members.append((genome, net))
-                    hall_of_fame.generation_added.append(gen_added)
-            print(f"Loaded Hall of Fame with {len(hall_of_fame)} members")
+    if args.resume:
+        print(f"Resuming from checkpoint: {args.resume}")
+        pop1, pop2, hall_of_fame1, hall_of_fame2, dominant_strategies, start_generation = load_checkpoint(args.resume)
+        start_generation += 1  # Start from the next generation
     else:
-        # Start fresh - clear previous checkpoints
-        if os.path.exists('checkpoints'):
-            for file in os.listdir('checkpoints'):
-                file_path = os.path.join('checkpoints', file)
-                if os.path.isfile(file_path):
-                    os.remove(file_path)
-        else:
-            os.makedirs('checkpoints')
-        pop = neat.Population(config)
-
-    # Add reporters
-    pop.add_reporter(neat.StdOutReporter(True))
-    stats = neat.StatisticsReporter()
-    pop.add_reporter(stats)
-
-    # Add Hall of Fame reporter
-    hof_reporter = HallOfFameReporter(hall_of_fame, config)
-    pop.add_reporter(hof_reporter)
-
-    checkpointer = neat.Checkpointer(
-        generation_interval=10,
-        filename_prefix='checkpoints/neat-checkpoint-'
-    )
-    pop.add_reporter(checkpointer)
+        pop1 = neat.Population(config)
+        pop2 = neat.Population(config)
+        dominant_strategies = []
+        hall_of_fame1 = []
+        hall_of_fame2 = []
+        start_generation = 0
 
     try:
-        pop.run(eval_genomes, args.generations)
-    finally:
-        # Save hall of fame on exit
-        hof_path = 'checkpoints/hall_of_fame.pkl'
-        hof_data = {
-            'genomes': [genome for genome, _ in hall_of_fame.members],
-            'generations': hall_of_fame.generation_added
-        }
-        with open(hof_path, 'wb') as f:
-            pickle.dump(hof_data, f)
-        print(f"Saved Hall of Fame with {len(hall_of_fame)} members to {hof_path}")
+        for generation in tqdm(range(start_generation, args.generations), desc="Generations", position=0):
+            # Evaluate pop1 using pop2 as parasites
+            champion1 = evaluate_against_parasites(pop1, pop2, hall_of_fame2, config, desc="Pop1 eval")
 
-    with open('best_genome.pkl', 'wb') as f:
-        pickle.dump(stats.best_genome(), f)
+            # Evaluate pop2 using pop1 as parasites
+            champion2 = evaluate_against_parasites(pop2, pop1, hall_of_fame1, config, desc="Pop2 eval")
+
+            generation_champion = get_gen_champion(champion1, champion2, config)
+
+            dominance_tournament(generation_champion, dominant_strategies, config)
+
+            # Reproduce both populations
+            pop1.species.speciate(config, pop1.population, generation)
+            pop1.population = pop1.reproduction.reproduce(config, pop1.species, config.pop_size, generation)
+            pop1.species.speciate(config, pop1.population, generation)  # Re-speciate new population
+
+            pop2.species.speciate(config, pop2.population, generation)
+            pop2.population = pop2.reproduction.reproduce(config, pop2.species, config.pop_size, generation)
+            pop2.species.speciate(config, pop2.population, generation)  # Re-speciate new population
+
+            # Save checkpoint periodically
+            if (generation + 1) % args.checkpoint_interval == 0:
+                checkpoint_path = f'checkpoints/checkpoint-gen-{generation + 1}.pkl'
+                save_checkpoint(checkpoint_path, pop1, pop2, hall_of_fame1, hall_of_fame2, dominant_strategies, generation)
+                tqdm.write(f"Saved checkpoint: {checkpoint_path} | Dominant strategies: {len(dominant_strategies)}")
+
+    except KeyboardInterrupt:
+        print("\nTraining interrupted by user.")
+    finally:
+        # Save final state
+        print(f"\nSaving final state...")
+        save_checkpoint('checkpoints/checkpoint-final.pkl', pop1, pop2, hall_of_fame1, hall_of_fame2, dominant_strategies, generation)
