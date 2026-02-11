@@ -1,7 +1,7 @@
 [NEAT]
 fitness_criterion     = max
 fitness_threshold     = 50
-pop_size              = 256
+pop_size              = 512
 reset_on_extinction   = False
 no_fitness_termination = True
 
@@ -85,12 +85,12 @@ structural_mutation_surer = default
 
 [DefaultSpeciesSet]
 # Paper: initial delta_t = 3.0, but we use higher to avoid too many species
-compatibility_threshold = 4.0
+compatibility_threshold = 6.0
 
 [DefaultStagnation]
 species_fitness_func = max
 # Paper: species >30 generations old not allowed to reproduce
-max_stagnation       = 30
+max_stagnation       = 15
 species_elitism      = 2
 
 [DefaultReproduction]

@@ -1,10 +1,16 @@
 import os
 import copy
+import time
 import neat
 import random
 import pickle
+import multiprocessing as mp
+from functools import partial
 from tqdm import tqdm
 from game.game import Game
+
+# Number of parallel workers (use all available cores)
+NUM_WORKERS = mp.cpu_count()
 
 def match(game, net1, net2, inv=False, extra_energy_1=None, extra_energy_2=None):
     """
@@ -33,7 +39,25 @@ def match(game, net1, net2, inv=False, extra_energy_1=None, extra_energy_2=None)
         return (0, 1) if not inv else (1, 0)
     else:
         return (0, 0)
-    
+
+def evaluate_genome_worker(args):
+    """Worker function to evaluate a single genome against all parasites."""
+    genome_id, genome, parasite_genomes, config = args
+
+    # Create networks (must be done in worker process)
+    host_net = neat.nn.RecurrentNetwork.create(genome, config)
+    parasite_nets = [neat.nn.RecurrentNetwork.create(g, config) for g in parasite_genomes]
+
+    game = Game(render=False)
+    fitness = 0
+    for parasite_net in parasite_nets:
+        f1, _ = match(game, host_net, parasite_net)
+        fitness += f1
+        f1, _ = match(game, host_net, parasite_net, inv=True)
+        fitness += f1
+
+    return genome_id, fitness
+
 def get_species_champions(pop, n=4):
     champions = []
     for species in pop.species.species.values():
@@ -52,7 +76,7 @@ def get_species_champions(pop, n=4):
     champions.sort(key=lambda g: g.fitness or 0, reverse=True)
     return champions[:n]
 
-def evaluate_against_parasites(host_pop, parasite_pop, hall_of_fame, config, desc="Evaluating"):
+def evaluate_against_parasites(host_pop, parasite_pop, hall_of_fame, config, pool, desc="Evaluating"):
     '''
     Host population is evaluated against a sample of parasites from the parasite population:
     - 4 highest species champions
@@ -60,19 +84,25 @@ def evaluate_against_parasites(host_pop, parasite_pop, hall_of_fame, config, des
     '''
     species_champions = get_species_champions(parasite_pop, n=4)
     hof_sample = random.sample(hall_of_fame, min(8, len(hall_of_fame))) if hall_of_fame else []
-    parasite_sample = species_champions + hof_sample
+    parasite_genomes = species_champions + hof_sample
 
-    parasite_nets = [neat.nn.RecurrentNetwork.create(g, config) for g in parasite_sample]
+    # Prepare args for parallel evaluation
+    eval_args = [
+        (genome_id, genome, parasite_genomes, config)
+        for genome_id, genome in host_pop.population.items()
+    ]
 
-    game = Game(render=False)
-    for host_genome_id, host_genome in tqdm(host_pop.population.items(), desc=desc, leave=False):
-        host_net = neat.nn.RecurrentNetwork.create(host_genome, config)
-        host_genome.fitness = 0
-        for parasite_net in parasite_nets:
-            f1, _ = match(game, host_net, parasite_net)
-            host_genome.fitness += f1
-            f1, _ = match(game, host_net, parasite_net, inv=True)
-            host_genome.fitness += f1
+    # Parallel evaluation with progress bar
+    results = list(tqdm(
+        pool.imap_unordered(evaluate_genome_worker, eval_args),
+        total=len(eval_args),
+        desc=desc,
+        leave=False
+    ))
+
+    # Update fitness values
+    for genome_id, fitness in results:
+        host_pop.population[genome_id].fitness = fitness
 
     champion_id, champion_genome = max(host_pop.population.items(), key=lambda item: item[1].fitness or 0)
     hall_of_fame.append(copy.deepcopy(champion_genome))
@@ -91,58 +121,101 @@ EXTRA_ENERGY_POINTS_LEFT = [
     (250, 500), (150, 500), (50, 500)
 ]
 
-def get_gen_champion(champion1, champion2, config):
+def champion_match_worker(args):
+    """Worker function for champion comparison matches."""
+    genome1, genome2, config, extra_left, extra_right = args
+
+    net1 = neat.nn.RecurrentNetwork.create(genome1, config)
+    net2 = neat.nn.RecurrentNetwork.create(genome2, config)
     game = Game(render=False)
-    net1 = neat.nn.RecurrentNetwork.create(champion1, config)
-    net2 = neat.nn.RecurrentNetwork.create(champion2, config)
-    fitness1 = 0
-    fitness2 = 0
-    for extra_left in EXTRA_ENERGY_POINTS_LEFT:
-        for extra_right in EXTRA_ENERGY_POINTS_RIGHT:
-            f1, f2 = match(game, net1, net2, extra_energy_1=extra_left, extra_energy_2=extra_right)
-            fitness1 += f1
-            fitness2 += f2
-            f1, f2 = match(game, net1, net2, inv=True, extra_energy_1=extra_left, extra_energy_2=extra_right)
-            fitness1 += f1
-            fitness2 += f2
+
+    f1_total, f2_total = 0, 0
+
+    f1, f2 = match(game, net1, net2, extra_energy_1=extra_left, extra_energy_2=extra_right)
+    f1_total += f1
+    f2_total += f2
+
+    f1, f2 = match(game, net1, net2, inv=True, extra_energy_1=extra_left, extra_energy_2=extra_right)
+    f1_total += f1
+    f2_total += f2
+
+    return f1_total, f2_total
+
+def get_gen_champion(champion1, champion2, config, pool):
+    # Prepare all match configurations
+    match_args = [
+        (champion1, champion2, config, extra_left, extra_right)
+        for extra_left in EXTRA_ENERGY_POINTS_LEFT
+        for extra_right in EXTRA_ENERGY_POINTS_RIGHT
+    ]
+
+    # Run matches in parallel
+    results = pool.map(champion_match_worker, match_args)
+
+    fitness1 = sum(r[0] for r in results)
+    fitness2 = sum(r[1] for r in results)
 
     if fitness1 >= fitness2:
         return champion1
     else:
         return champion2
 
-def dominance_tournament(generation_champion, dominant_strategies, config):
+def dominance_match_worker(args):
+    """Worker function for dominance tournament matches."""
+    champion, dominant, config, extra_left, extra_right = args
+
+    net_champion = neat.nn.RecurrentNetwork.create(champion, config)
+    net_dominant = neat.nn.RecurrentNetwork.create(dominant, config)
+    game = Game(render=False)
+
+    f_champ, f_dom = 0, 0
+
+    f1, f2 = match(game, net_champion, net_dominant, extra_energy_1=extra_left, extra_energy_2=extra_right)
+    f_champ += f1
+    f_dom += f2
+
+    f1, f2 = match(game, net_champion, net_dominant, inv=True, extra_energy_1=extra_left, extra_energy_2=extra_right)
+    f_champ += f1
+    f_dom += f2
+
+    return f_champ, f_dom
+
+def dominance_tournament(generation_champion, dominant_strategies, config, pool):
     """
     Test if generation_champion beats ALL previous dominant strategies.
     If so, add it to the dominant strategies list.
+    Returns True if a new dominant strategy was added.
     """
     # First generation champion is automatically the first dominant strategy
     if not dominant_strategies:
         dominant_strategies.append(copy.deepcopy(generation_champion))
-        return
+        tqdm.write(f"*** NEW DOMINANT STRATEGY #{len(dominant_strategies)} (first) ***")
+        return True
 
-    game = Game(render=False)
-    net_champion = neat.nn.RecurrentNetwork.create(generation_champion, config)
+    for i, dominant_strategy in enumerate(dominant_strategies):
+        # Prepare all match configurations for this opponent
+        match_args = [
+            (generation_champion, dominant_strategy, config, extra_left, extra_right)
+            for extra_left in EXTRA_ENERGY_POINTS_LEFT
+            for extra_right in EXTRA_ENERGY_POINTS_RIGHT
+        ]
 
-    for dominant_strategy in dominant_strategies:
-        net_dominant = neat.nn.RecurrentNetwork.create(dominant_strategy, config)
-        fitness_champion, fitness_dominant = 0, 0
+        # Run matches in parallel
+        results = pool.map(dominance_match_worker, match_args)
 
-        for extra_left in EXTRA_ENERGY_POINTS_LEFT:
-            for extra_right in EXTRA_ENERGY_POINTS_RIGHT:
-                f1, f2 = match(game, net_champion, net_dominant, extra_energy_1=extra_left, extra_energy_2=extra_right)
-                fitness_champion += f1
-                fitness_dominant += f2
-                f1, f2 = match(game, net_champion, net_dominant, inv=True, extra_energy_1=extra_left, extra_energy_2=extra_right)
-                fitness_champion += f1
-                fitness_dominant += f2
+        fitness_champion = sum(r[0] for r in results)
+        fitness_dominant = sum(r[1] for r in results)
 
         # Must beat (not just tie) each dominant strategy
         if fitness_champion <= fitness_dominant:
-            return  # Failed to beat this one, not a new dominant strategy
+            return False  # Failed to beat this one, not a new dominant strategy
+        
+        tqdm.write(f"Generation champion beats dominant strategy #{i+1} with score {fitness_champion} vs {fitness_dominant}")
 
     # Beat all previous dominant strategies
     dominant_strategies.append(copy.deepcopy(generation_champion))
+    tqdm.write(f"*** NEW DOMINANT STRATEGY #{len(dominant_strategies)} ***")
+    return True
 
 def save_checkpoint(filepath, pop1, pop2, hall_of_fame1, hall_of_fame2, dominant_strategies, generation):
     """Save training state to a checkpoint file."""
@@ -177,7 +250,7 @@ if __name__ == '__main__':
     parser.add_argument('--config', type=str, default='config.txt', help='Path to NEAT config file')
     parser.add_argument('--generations', type=int, default=500, help='Number of generations to train')
     parser.add_argument('--resume', type=str, default=None, help='Path to checkpoint file to resume from')
-    parser.add_argument('--checkpoint-interval', type=int, default=10, help='Save checkpoint every N generations')
+    parser.add_argument('--workers', type=int, default=NUM_WORKERS, help='Number of parallel workers')
     args = parser.parse_args()
 
     # Create checkpoints directory
@@ -204,36 +277,52 @@ if __name__ == '__main__':
         hall_of_fame2 = []
         start_generation = 0
 
-    try:
-        for generation in tqdm(range(start_generation, args.generations), desc="Generations", position=0):
-            # Evaluate pop1 using pop2 as parasites
-            champion1 = evaluate_against_parasites(pop1, pop2, hall_of_fame2, config, desc="Pop1 eval")
+    print(f"Using {args.workers} parallel workers")
 
-            # Evaluate pop2 using pop1 as parasites
-            champion2 = evaluate_against_parasites(pop2, pop1, hall_of_fame1, config, desc="Pop2 eval")
+    # Create process pool
+    with mp.Pool(processes=args.workers) as pool:
+        try:
+            for generation in tqdm(range(start_generation, args.generations), desc="Generations", position=0):
+                t0 = time.time()
 
-            generation_champion = get_gen_champion(champion1, champion2, config)
+                # Evaluate pop1 using pop2 as parasites
+                champion1 = evaluate_against_parasites(pop1, pop2, hall_of_fame2, config, pool, desc="Pop1 eval")
+                t1 = time.time()
 
-            dominance_tournament(generation_champion, dominant_strategies, config)
+                # Evaluate pop2 using pop1 as parasites
+                champion2 = evaluate_against_parasites(pop2, pop1, hall_of_fame1, config, pool, desc="Pop2 eval")
+                t2 = time.time()
 
-            # Reproduce both populations
-            pop1.species.speciate(config, pop1.population, generation)
-            pop1.population = pop1.reproduction.reproduce(config, pop1.species, config.pop_size, generation)
-            pop1.species.speciate(config, pop1.population, generation)  # Re-speciate new population
+                generation_champion = get_gen_champion(champion1, champion2, config, pool)
+                t3 = time.time()
 
-            pop2.species.speciate(config, pop2.population, generation)
-            pop2.population = pop2.reproduction.reproduce(config, pop2.species, config.pop_size, generation)
-            pop2.species.speciate(config, pop2.population, generation)  # Re-speciate new population
+                new_dominant = dominance_tournament(generation_champion, dominant_strategies, config, pool)
+                t4 = time.time()
 
-            # Save checkpoint periodically
-            if (generation + 1) % args.checkpoint_interval == 0:
-                checkpoint_path = f'checkpoints/checkpoint-gen-{generation + 1}.pkl'
-                save_checkpoint(checkpoint_path, pop1, pop2, hall_of_fame1, hall_of_fame2, dominant_strategies, generation)
-                tqdm.write(f"Saved checkpoint: {checkpoint_path} | Dominant strategies: {len(dominant_strategies)}")
+                # Reproduce both populations
+                pop1.species.speciate(config, pop1.population, generation)
+                pop1.population = pop1.reproduction.reproduce(config, pop1.species, config.pop_size, generation)
+                pop1.species.speciate(config, pop1.population, generation)  # Re-speciate new population
 
-    except KeyboardInterrupt:
-        print("\nTraining interrupted by user.")
-    finally:
-        # Save final state
-        print(f"\nSaving final state...")
-        save_checkpoint('checkpoints/checkpoint-final.pkl', pop1, pop2, hall_of_fame1, hall_of_fame2, dominant_strategies, generation)
+                pop2.species.speciate(config, pop2.population, generation)
+                pop2.population = pop2.reproduction.reproduce(config, pop2.species, config.pop_size, generation)
+                pop2.species.speciate(config, pop2.population, generation)  # Re-speciate new population
+                t5 = time.time()
+
+                tqdm.write(f"Gen {generation} | Pop1: {t1-t0:.1f}s | Pop2: {t2-t1:.1f}s | "
+                           f"Champion: {t3-t2:.1f}s | Dominance: {t4-t3:.1f}s | Repro: {t5-t4:.1f}s | "
+                           f"Total: {t5-t0:.1f}s")
+
+                # Save checkpoint when a new dominant strategy is found
+                if new_dominant:
+                    checkpoint_path = f'checkpoints/checkpoint-dominant-{len(dominant_strategies)}.pkl'
+                    save_checkpoint(checkpoint_path, pop1, pop2, hall_of_fame1, hall_of_fame2, dominant_strategies, generation)
+                    tqdm.write(f"Saved checkpoint: {checkpoint_path} | Dominant strategies: {len(dominant_strategies)}")
+
+        except KeyboardInterrupt:
+            print("\nTraining interrupted by user.")
+        finally: 
+            # Save final checkpoint
+            checkpoint_path = f'checkpoints/final_checkpoint.pkl'
+            save_checkpoint(checkpoint_path, pop1, pop2, hall_of_fame1, hall_of_fame2, dominant_strategies, generation)
+            print(f"Saved final checkpoint: {checkpoint_path} | Dominant strategies: {len(dominant_strategies)}")

@@ -16,9 +16,11 @@ class Robot:
         self.radars = []
         self.energy_points = energy_points
         self.energy = 0
-        self.sensor_angles = [-150, -60, 0, 60, 150]  # taken from the current angle of the robot
-        self.opponent_range_sensor_length = 50
-        self.energy_range_sensor_length = 30
+        self.food_collected = 0
+        self.distance_traveled = 0
+        self.sensor_angles = [0, 72, 144, -144, -72]  # 5 evenly spaced sector centers (72° each)
+        self.opponent_range_sensor_length = 100
+        self.energy_range_sensor_length = 75
 
         self.rect = pygame.Rect(0, 0, ROBOT_SIZE, ROBOT_SIZE)
         self.rect.center = (x, y)
@@ -26,22 +28,24 @@ class Robot:
 
     def update(self, left, right, forward, other_robot):
         # Compute movement parameters
-        theta = math.degrees(0.24 * (left - right))  # ~13.75° max turn
+        theta_rad = 0.24 * (left - right)  # radians (~0.24 max)
+        theta_deg = math.degrees(theta_rad)
         forward_distance = 1.33 * forward  # max 1.33 pixels per step
 
         # Half turn -> forward -> half turn (paper's combined motion)
-        self.rotate(theta / 2)
+        self.rotate(theta_deg / 2)
         self.translate(forward_distance)
-        self.rotate(theta / 2)
+        self.rotate(theta_deg / 2)
 
-        # Energy cost proportional to movement
-        self.energy -= abs(theta) + forward_distance
+        # Energy cost in radians (as per paper)
+        self.energy -= abs(theta_rad) + forward_distance
         self.collision(other_robot)
 
     def translate(self, distance):
         if distance > 0:
             direction = self.vel_vector.normalize()
             self.rect.center += direction * distance
+            self.distance_traveled += distance
 
         # if robot is out of screen, keep it inside
         if self.rect.left < 0:
@@ -70,60 +74,62 @@ class Robot:
         for energy_point in self.energy_points:
             if self.rect.colliderect(energy_point.rect):
                 self.energy += 500 # as paper states
+                self.food_collected += 1
                 self.energy_points.remove(energy_point)
     
+    def _normalize_angle(self, angle):
+        '''Normalize angle to [-180, 180].'''
+        return (angle + 180) % 360 - 180
+
     def radar(self, other_robot):
         '''
-        Measure distances (paper: 5 opponent + 5 food + 1 wall = 11 sensors).
-        Returns:
-        - 5 distances to opponent (0 if no opponent in sensor range)
-        - 5 distances to energy points (0 if no energy point in sensor range)
-        - 1 distance to wall (forward-facing only)
+        Pie-slice sector sensors: 5 sectors of 72° each covering full 360°.
+        Each sector reports the normalized distance to the closest target.
+        0 = object at robot position, 1 = at max range or not in this sector.
+
+        Returns 11 values:
+        - 5 opponent sector distances (normalized)
+        - 5 food sector distances (normalized)
+        - 1 wall distance (forward, normalized)
         '''
-        x = int(self.rect.center[0])
-        y = int(self.rect.center[1])
+        x, y = self.rect.center
+        sector_width = 360.0 / len(self.sensor_angles)  # 72°
 
-        for sensor_angle in self.sensor_angles:
-            # Opponent radar
-            length = 0
-            sensor_rad = math.radians(self.angle + sensor_angle)
-            dx = math.cos(sensor_rad)
-            dy = -math.sin(sensor_rad)
+        # Angle and distance to opponent
+        ox, oy = other_robot.rect.center
+        dx_opp = ox - x
+        dy_opp = -(oy - y)  # flip y for standard math coords
+        dist_to_opp = math.hypot(dx_opp, dy_opp)
+        angle_to_opp = math.degrees(math.atan2(dy_opp, dx_opp))
+        rel_angle_opp = self._normalize_angle(angle_to_opp - self.angle)
 
-            while length < self.opponent_range_sensor_length:
-                length += 1
-                target_x = int(x + dx * length)
-                target_y = int(y + dy * length)
+        for center in self.sensor_angles:
+            # --- Opponent sensor (unlimited range, normalized by arena diagonal) ---
+            angle_diff = self._normalize_angle(rel_angle_opp - center)
+            max_dist = math.hypot(SCREEN_WIDTH, SCREEN_HEIGHT)
+            if abs(angle_diff) <= sector_width / 2:
+                self.radars.append(dist_to_opp / max_dist)
+            else:
+                self.radars.append(1.0)
 
-                if target_x < 0 or target_x >= SCREEN_WIDTH or target_y < 0 or target_y >= SCREEN_HEIGHT:
-                    break
+            # --- Food sensor (closest energy point in this sector) ---
+            closest_food_norm = 1.0
+            for ep in self.energy_points:
+                ex, ey = ep.rect.center
+                dx_food = ex - x
+                dy_food = -(ey - y)
+                dist_food = math.hypot(dx_food, dy_food)
+                if dist_food > self.energy_range_sensor_length:
+                    continue
+                angle_to_food = math.degrees(math.atan2(dy_food, dx_food))
+                rel_angle_food = self._normalize_angle(angle_to_food - self.angle)
+                angle_diff_food = self._normalize_angle(rel_angle_food - center)
+                if abs(angle_diff_food) <= sector_width / 2:
+                    norm_dist = dist_food / self.energy_range_sensor_length
+                    closest_food_norm = min(closest_food_norm, norm_dist)
+            self.radars.append(closest_food_norm)
 
-                if other_robot.rect.collidepoint(target_x, target_y):
-                    break
-
-            self.radars.append(length if length < self.opponent_range_sensor_length else 0)
-
-            # Energy radar
-            length = 0
-            while length < self.energy_range_sensor_length:
-                length += 1
-                target_x = int(x + dx * length)
-                target_y = int(y + dy * length)
-
-                if target_x < 0 or target_x >= SCREEN_WIDTH or target_y < 0 or target_y >= SCREEN_HEIGHT:
-                    break
-
-                hit_energy = False
-                for energy_point in self.energy_points:
-                    if energy_point.rect.collidepoint(target_x, target_y):
-                        hit_energy = True
-                        break
-                if hit_energy:
-                    break
-
-            self.radars.append(length if length < self.energy_range_sensor_length else 0)
-
-        # Single wall sensor (forward-facing, as per paper)
+        # Single wall sensor (forward-facing)
         forward_rad = math.radians(self.angle)
         dx = math.cos(forward_rad)
         dy = -math.sin(forward_rad)
@@ -134,23 +140,22 @@ class Robot:
             target_y = int(y + dy * length)
             if target_x < 0 or target_x >= SCREEN_WIDTH or target_y < 0 or target_y >= SCREEN_HEIGHT:
                 break
-        self.radars.append(length)
+        self.radars.append(length / max(SCREEN_WIDTH, SCREEN_HEIGHT))
     
     def state(self, other_robot):
-        '''  
-        Total of 12 inputs:
-        - 5 sensors distances to opponent
-        - 5 sensors distances to energy points
-        - 1 sensor distance to wall
-        - difference in energy levels
+        '''
+        Total of 12 inputs (all normalized):
+        - 5 opponent sector distances [0=close, 1=far/not in sector]
+        - 5 food sector distances [0=close, 1=far/not in sector]
+        - 1 wall distance [0=close, 1=far]
+        - energy difference (clamped to [-1, 1])
         '''
         self.radars.clear()
         self.radar(other_robot)
-        
-        inputs = []
-        inputs.extend([radar for radar in self.radars])  # 11 inputs from radars
+
+        inputs = list(self.radars)  # 11 normalized inputs
         energy_diff = self.energy - other_robot.energy
-        inputs.append(energy_diff)  # 1 input for energy difference
+        inputs.append(max(-1.0, min(1.0, energy_diff / 1000.0)))
 
         return inputs
     
@@ -160,17 +165,15 @@ class Robot:
         end_pos = (self.rect.center[0] + self.vel_vector.x * ROBOT_SIZE,
                    self.rect.center[1] + self.vel_vector.y * ROBOT_SIZE)
         pygame.draw.line(screen, (255, 255, 255), self.rect.center, end_pos, 2)
-        # draw circle for radar range
-        pygame.draw.circle(screen, (255, 255, 255), self.rect.center, self.opponent_range_sensor_length, 1)
+        # draw range circles
         pygame.draw.circle(screen, (0, 255, 0), self.rect.center, self.energy_range_sensor_length, 1)
-        # draw sensors
-        for sensor_angle in self.sensor_angles:
-            sensor_rad = math.radians(self.angle + sensor_angle)
-            dx = math.cos(sensor_rad)
-            dy = -math.sin(sensor_rad)
-            end_pos = (self.rect.center[0] + dx * self.opponent_range_sensor_length,
-                       self.rect.center[1] + dy * self.opponent_range_sensor_length)
-            pygame.draw.circle(screen, (255, 255, 255), end_pos, 3)
-            end_pos_energy = (self.rect.center[0] + dx * self.energy_range_sensor_length,
+        # draw sector boundaries
+        sector_width = 360.0 / len(self.sensor_angles)
+        for center in self.sensor_angles:
+            boundary_angle = center + sector_width / 2
+            rad = math.radians(self.angle + boundary_angle)
+            dx = math.cos(rad)
+            dy = -math.sin(rad)
+            end_pos = (self.rect.center[0] + dx * self.energy_range_sensor_length,
                        self.rect.center[1] + dy * self.energy_range_sensor_length)
-            pygame.draw.circle(screen, (0, 255, 0), end_pos_energy, 3)
+            pygame.draw.line(screen, (100, 100, 100), self.rect.center, end_pos, 1)
