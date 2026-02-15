@@ -1,2 +1,14 @@
 __pycache__
-backup_checkpoints
+*.aux
+*.log
+*.nav
+*.out
+*.snm
+*.gz
+*.toc
+*.sty
+*.tex
+*.vrb
+*.bbl
+presentation
+output.txt

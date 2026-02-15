@@ -7,8 +7,6 @@ no_fitness_termination = True
 
 [DefaultGenome]
 # node activation options
-# Paper uses modified sigmoid: phi(x) = 1/(1+e^(-4.9x))
-# NEAT-Python's "sigmoid" is 1/(1+e^(-x)), so we use response to scale: 4.9*x
 activation_default      = sigmoid
 activation_mutate_rate  = 0.0
 activation_options      = sigmoid
@@ -31,21 +29,18 @@ bias_replace_rate       = 0.1
 bias_init_type          = gaussian
 
 # genome compatibility options
-# Paper: c1=1.0, c2=1.0, c3=2.0 (NEAT-Python combines c1+c2 into disjoint_coefficient)
 compatibility_disjoint_coefficient = 1.0
 compatibility_weight_coefficient   = 2.0
 
 # connection add/remove rates
-# Paper: link add prob = 0.1, node add prob = 0.01
 conn_add_prob           = 0.1
 conn_delete_prob        = 0.0
 
 # connection enable options
-# Paper: 75% chance gene disabled if disabled in either parent
 enabled_default         = True
 enabled_mutate_rate     = 0.01
 
-# Paper: recurrent connections are crucial for success (POMDP domain)
+# Using RNN for memory
 feed_forward            = False
 initial_connection      = full
 
@@ -59,7 +54,6 @@ num_inputs              = 12
 num_outputs             = 3
 
 # node response options
-# Scale to approximate paper's modified sigmoid phi(x) = 1/(1+e^(-4.9x))
 response_init_mean      = 4.9
 response_init_stdev     = 0.0
 response_max_value      = 30.0
@@ -70,7 +64,6 @@ response_replace_rate   = 0.0
 response_init_type      = gaussian
 
 # connection weight options
-# Paper: 80% chance of weight mutation, 90% perturbed, 10% new random
 weight_init_type        = gaussian
 weight_init_mean        = 0.0
 weight_init_stdev       = 1.0
@@ -84,18 +77,14 @@ single_structural_mutation = false
 structural_mutation_surer = default
 
 [DefaultSpeciesSet]
-# Paper: initial delta_t = 3.0, but we use higher to avoid too many species
 compatibility_threshold = 6.0
 
 [DefaultStagnation]
 species_fitness_func = max
-# Paper: species >30 generations old not allowed to reproduce
 max_stagnation       = 15
 species_elitism      = 2
 
 [DefaultReproduction]
-# Paper: champion of species >5 members copied unchanged
 elitism            = 1
-# Paper: 25% offspring from mutation only (75% survival for crossover)
 survival_threshold = 0.2
 min_species_size = 2

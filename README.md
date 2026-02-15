@@ -8,6 +8,11 @@
 
 ---
 
+<div align="center">
+   <img src="match_5vs4.gif" alt="Match checkpoint 5 vs 4">
+</div>
+
+---
 
 ## How to run the game
 
@@ -21,5 +26,5 @@ uv pip install -r requirements.txt
 Then, enter the `game` folder and run the `run.py` code:
 ```
 cd game 
-uv run run.py
+uv run play.py --genome <select a checkpoint> --opponent <random/select a checkpoint>
 ```

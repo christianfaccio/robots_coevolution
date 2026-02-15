@@ -73,7 +73,6 @@ def play(config_path, genome_path='random', opponent='random'):
 
     running = True
     wins = {'trained': 0, 'opponent': 0, 'draw': 0}
-
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -126,6 +125,7 @@ def play(config_path, genome_path='random', opponent='random'):
                 output2 = (random.random(), random.random(), random.random())
 
             game.play(output1, output2)
+
             game.clock.tick(30)
         else:
             # Update win counter
